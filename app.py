@@ -1,38 +1,84 @@
 import streamlit as st
 import pandas as pd
 import os
+from datetime import date
 
-# 1. 초기 설정
+# 1. 초기 설정 및 데이터 파일 정의
 st.set_page_config(page_title="우리들의 다이어트 챌린지", page_icon="🏃‍♀️", layout="centered")
 
-DATA_FILE = "diet_data.csv"
+DIET_DATA_FILE = "diet_data.csv"
+WEIGHTS_FILE = "initial_weights.csv"
 USERS = ["민경", "세진", "유진"]
 
-# 💡 여기에 세 분의 4월 1일 시작 체중을 정확히 적어주세요! (소수점 첫째 자리까지)
-INITIAL_WEIGHTS = {
-    "민경": 64.0, 
-    "세진": 60.0, 
-    "유진": 55.0
-}
+# 관리자 비밀번호 (시작 몸무게 수정용)
+ADMIN_PASSWORD = "1234" 
 
-MAX_LOSS_LIMIT = 1.0  # 주간 최대 감량 인정치 (1kg)
-BASE_POOL = 60000     # 초기 공동 회비 (2만 원 x 3명)
+# --- [추가된 기능] D-Day 계산 ---
+today = date.today()
+target_date = date(today.year, 6, 30) # 6월 30일 종료
+start_date = date(today.year, 4, 1)   # 4월 1일 시작
 
-# 2. 데이터 불러오기 함수
-def load_data():
-    if os.path.exists(DATA_FILE):
-        return pd.read_csv(DATA_FILE)
+d_day = (target_date - today).days
+
+if d_day > 0:
+    d_day_text = f"⏳ D-{d_day}"
+elif d_day == 0:
+    d_day_text = "🎉 D-Day (종료일)!"
+else:
+    d_day_text = "🏁 챌린지 종료"
+
+# 2. 데이터 불러오기 함수 
+def load_data(file_name, columns):
+    if os.path.exists(file_name):
+        return pd.read_csv(file_name)
     else:
-        return pd.DataFrame(columns=["주차", "이름", "목표감량(kg)", "실제감량(kg)", "결과"])
+        return pd.DataFrame(columns=columns)
 
-df = load_data()
+df = load_data(DIET_DATA_FILE, ["주차", "이름", "목표감량(kg)", "실제감량(kg)", "결과"])
+weights_df = load_data(WEIGHTS_FILE, ["이름", "시작몸무게(kg)"])
 
-# 3. 상단 타이틀
+# 3. 메인 타이틀
 st.title("🔥 4~6월 다이어트 챌린지")
-st.markdown("### 민경, 세진, 유진의 15만 원 환급 프로젝트 💸")
-st.info(f"💡 **기본 룰:** 주간 목표 달성 시 1만 원 환급! (건강을 위해 주당 최대 {MAX_LOSS_LIMIT}kg까지만 인정)")
+st.markdown("### 민경, 세진, 유진의 13만 원 환급 프로젝트 💸")
 
-# 4. 기록 입력 폼
+# 디데이 알림창 추가
+st.info(f"**진행 기간:** 4월 1일 ~ 6월 30일\n\n**현재 남은 시간:** {d_day_text}")
+st.divider()
+
+# 4. [설정 단계] 시작 몸무게 입력 여부 확인
+configured_users = weights_df["이름"].tolist()
+missing_users = [user for user in USERS if user not in configured_users]
+
+if missing_users:
+    st.subheader("🛠️ 4월 1일 시작 몸무게 설정 (최초 1회)")
+    st.warning("아직 시작 몸무게를 입력하지 않은 참가자가 있습니다. 먼저 입력해 주세요!")
+    
+    with st.form("weight_setting_form"):
+        col1, col2 = st.columns([1, 2])
+        with col1:
+            setup_name = st.selectbox("참가자 선택", missing_users)
+        with col2:
+            setup_weight = st.number_input("4월 1일 몸무게 (kg)", min_value=0.0, step=0.1)
+        
+        save_btn = st.form_submit_button("시작 몸무게 저장하기")
+        
+        if save_btn:
+            if setup_weight > 0:
+                new_weight = pd.DataFrame([{"이름": setup_name, "시작몸무게(kg)": setup_weight}])
+                weights_df = pd.concat([weights_df, new_weight], ignore_index=True)
+                weights_df.to_csv(WEIGHTS_FILE, index=False)
+                st.success(f"{setup_name}님, 시작 몸무게 {setup_weight}kg 설정 완료!")
+                st.rerun()
+            else:
+                st.error("정확한 몸무게를 입력해 주세요.")
+    
+    st.divider()
+    st.stop() 
+
+# --- 이하 메인 앱 기능 ---
+
+# 5. 주간 기록 입력 폼
+st.subheader("✍️ 이번 주 다이어트 기록")
 with st.form("record_form"):
     col1, col2 = st.columns(2)
     with col1:
@@ -45,10 +91,8 @@ with st.form("record_form"):
     submitted = st.form_submit_button("기록 저장하기")
 
     if submitted:
-        if actual > MAX_LOSS_LIMIT:
-            st.warning(f"🚨 앗! 주간 최대 감량치({MAX_LOSS_LIMIT}kg) 초과! 무리한 다이어트는 안 돼요. (실패 처리)")
-            result = "실패"
-        elif actual >= goal and goal > 0:
+        # 주간 최대 감량 제한 로직 삭제됨
+        if actual >= goal and goal > 0:
             st.success("🎉 목표 달성! 1만 원 환급 확정!")
             result = "성공"
         else:
@@ -57,43 +101,64 @@ with st.form("record_form"):
             
         new_data = pd.DataFrame([{"주차": week, "이름": name, "목표감량(kg)": goal, "실제감량(kg)": actual, "결과": result}])
         df = pd.concat([df, new_data], ignore_index=True)
-        df.to_csv(DATA_FILE, index=False)
+        df.to_csv(DIET_DATA_FILE, index=False)
         st.rerun()
 
 st.divider()
 
-# 5. 공동 회비 현황
-st.subheader("💰 공동 회비 & 환급 현황")
-fail_count = len(df[df["결과"] == "실패"])
-total_pool = BASE_POOL + (fail_count * 10000)
-st.metric(label="현재 모인 공동 회비 (기본 6만 원 + 벌금 누적)", value=f"{total_pool:,} 원")
+# 6. 공동 회비 & 개인별 현황 대시보드
+col_money, col_status = st.columns([1, 2])
 
-st.divider()
+with col_money:
+    st.subheader("💰 공동 회비")
+    fail_count = len(df[df["결과"] == "실패"])
+    total_pool = fail_count * 10000 
+    st.metric(label="현재 모인 벌금 총액", value=f"{total_pool:,} 원")
+    st.caption("목표 미달성으로 쌓인 회비! 6월 파티 비용 🥳")
 
-# 6. ★추가된 기능★ 개인별 누적 감량 및 현재 체중
-st.subheader("🏃‍♀️ 개인별 다이어트 현황")
-col_m, col_s, col_y = st.columns(3)
-
-for i, user in enumerate(USERS):
-    user_data = df[df["이름"] == user]
-    total_loss = user_data["실제감량(kg)"].sum()
-    current_weight = INITIAL_WEIGHTS[user] - total_loss
+with col_status:
+    st.subheader("🏃‍♀️ 누적 감량 현황")
+    init_weights = weights_df.set_index("이름")["시작몸무게(kg)"].to_dict()
     
-    with [col_m, col_s, col_y][i]:
-        st.markdown(f"**{user}**")
-        st.write(f"시작: {INITIAL_WEIGHTS[user]} kg")
-        st.write(f"현재: **{current_weight:.1f} kg**")
-        st.write(f"(총 **{total_loss:.1f} kg** 감량)")
+    col_m, col_s, col_y = st.columns(3)
+    for i, user in enumerate(USERS):
+        user_data = df[df["이름"] == user]
+        total_loss = user_data["실제감량(kg)"].sum()
+        current_weight = init_weights[user] - total_loss
+        
+        with [col_m, col_s, col_y][i]:
+            st.markdown(f"**{user}**")
+            st.caption(f"시작: {init_weights[user]} kg")
+            st.write(f"현재: **{current_weight:.1f} kg**")
+            st.write(f"(총 **{total_loss:.1f} kg** 감량)")
 
 st.divider()
 
-# 7. ★업그레이드★ 기록 수정 및 삭제 ( st.data_editor )
-st.subheader("✏️ 전체 기록 확인 및 수정/삭제")
-st.caption("🚨 **삭제하는 법:** 맨 왼쪽 네모 빈칸을 체크하고, 표 오른쪽 위에 생기는 휴지통 아이콘을 누르면 삭제됩니다. (숫자를 터치해 바로 고칠 수도 있습니다!)")
+# 7. 기록 수정 및 삭제 
+st.subheader("✏️ 지난 기록 수정 및 삭제")
+st.caption("🚨 **삭제 방법:** 왼쪽 네모 체크 ➡️ 표 위 휴지통 아이콘 클릭")
 
-edited_df = st.data_editor(df, num_rows="dynamic", use_container_width=True)
+edited_df = st.data_editor(df, num_rows="dynamic", use_container_width=True, key="data_editor")
 
 if not edited_df.equals(df):
-    edited_df.to_csv(DATA_FILE, index=False)
-    st.success("수정/삭제 완료! (화면이 곧 새로고침 됩니다)")
+    edited_df.to_csv(DIET_DATA_FILE, index=False)
+    st.success("기록 수정 완료! (화면이 곧 새로고침 됩니다)")
     st.rerun()
+
+st.divider()
+
+# 8. 시작 몸무게 수정 (관리자용)
+with st.expander("🛠️ 시작 몸무게 수정 (비밀번호 필요)"):
+    pwd = st.text_input("관리자 비밀번호를 입력하세요", type="password")
+    if pwd == ADMIN_PASSWORD:
+        st.info("시작 몸무게를 고치거나 삭제할 수 있습니다.")
+        edited_weights_df = st.data_editor(weights_df, num_rows="dynamic", use_container_width=True)
+        if not edited_weights_df.equals(weights_df):
+            edited_weights_df.to_csv(WEIGHTS_FILE, index=False)
+            st.success("시작 몸무게 수정 완료! (화면이 곧 새로고침 됩니다)")
+            st.rerun()
+    elif pwd:
+        st.error("비밀번호가 틀렸습니다.")
+
+st.divider()
+st.caption("💡 수정 및 삭제는 4월 1일 전 테스트 기간 동안 마음껏 해보세요!")
